@@ -43,6 +43,11 @@ namespace Synchronization
                 }
 
                 completedThreads++;
+
+                if (completedThreads == totalThreads)
+                {
+                    Monitor.PulseAll(locker); 
+                }
             }
         }
 
@@ -51,11 +56,29 @@ namespace Synchronization
         public static int CompletedThreads => completedThreads;
         public static int TotalThreads { set { totalThreads = value; } }
 
-        public static bool AllThreadsCompleted()
+        public static void StartThreadsAndWait(int[] array, int numThreads)
         {
+            totalThreads = numThreads;
+            int arraySize = array.Length;
+            int chunkSize = arraySize / numThreads;
+            Thread[] threads = new Thread[numThreads];
+
+            for (int i = 0; i < numThreads; i++)
+            {
+                int start = i * chunkSize;
+                int end = (i == numThreads - 1) ? arraySize : start + chunkSize;
+
+                MinFinderThread worker = new MinFinderThread(array, start, end);
+                threads[i] = new Thread(worker.FindMin);
+                threads[i].Start();
+            }
+
             lock (locker)
             {
-                return completedThreads == totalThreads;
+                while (completedThreads < numThreads)
+                {
+                    Monitor.Wait(locker);
+                }
             }
         }
     }
@@ -70,25 +93,7 @@ namespace Synchronization
             Console.Write("Enter the number of threads: ");
             int numThreads = int.Parse(Console.ReadLine());
 
-            MinFinderThread.TotalThreads = numThreads;
-
-            int chunkSize = arraySize / numThreads;
-            Thread[] threads = new Thread[numThreads];
-
-            for (int i = 0; i < numThreads; i++)
-            {
-                int start = i * chunkSize;
-                int end = (i == numThreads - 1) ? arraySize : start + chunkSize;
-
-                MinFinderThread worker = new MinFinderThread(array, start, end);
-                threads[i] = new Thread(worker.FindMin);
-                threads[i].Start();
-            }
-
-            while (!MinFinderThread.AllThreadsCompleted())
-            {
-                Thread.Sleep(10); 
-            }
+            MinFinderThread.StartThreadsAndWait(array, numThreads);
 
             Console.WriteLine($"Global Min: {MinFinderThread.GlobalMin}, Index: {MinFinderThread.GlobalIndex}");
         }
