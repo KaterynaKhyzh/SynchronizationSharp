@@ -3,21 +3,62 @@ using System.Threading;
 
 namespace Synchronization
 {
+    class MinResultCollector
+    {
+        private int globalMin = int.MaxValue;
+        private int globalIndex = -1;
+        private int completedThreads = 0;
+        private readonly object locker = new object();
+        private readonly int totalThreads;
+
+        public MinResultCollector(int totalThreads)
+        {
+            this.totalThreads = totalThreads;
+        }
+
+        public void Collect(int localMin, int localIndex)
+        {
+            lock (locker)
+            {
+                if (localMin < globalMin)
+                {
+                    globalMin = localMin;
+                    globalIndex = localIndex;
+                }
+                completedThreads++;
+                if (completedThreads == totalThreads)
+                {
+                    Monitor.Pulse(locker);
+                }
+            }
+        }
+
+        public (int, int) GetResult()
+        {
+            lock (locker)
+            {
+                while (completedThreads < totalThreads)
+                {
+                    Monitor.Wait(locker);
+                }
+            }
+            return (globalMin, globalIndex);
+        }
+    }
+
     class MinFinderThread
     {
-        private int[] array;
-        private int start, end;
-        private static int globalMin = int.MaxValue;
-        private static int globalIndex = -1;
-        private static int completedThreads = 0;
-        private static int totalThreads = 0;
-        private static readonly object locker = new object();
+        private readonly int[] array;
+        private readonly int start;
+        private readonly int end;
+        private readonly MinResultCollector collector;
 
-        public MinFinderThread(int[] array, int start, int end)
+        public MinFinderThread(int[] array, int start, int end, MinResultCollector collector)
         {
             this.array = array;
             this.start = start;
             this.end = end;
+            this.collector = collector;
         }
 
         public void FindMin()
@@ -33,72 +74,42 @@ namespace Synchronization
                     localIndex = i;
                 }
             }
+            collector.Collect(localMin, localIndex);
+        }
+    }
 
-            lock (locker)
-            {
-                if (localMin < globalMin)
-                {
-                    globalMin = localMin;
-                    globalIndex = localIndex;
-                }
+    class MinFinderExecutor
+    {
+        private readonly int[] array;
+        private readonly int numThreads;
+        private readonly MinResultCollector collector;
 
-                completedThreads++;
-
-                if (completedThreads == totalThreads)
-                {
-                    Monitor.PulseAll(locker); 
-                }
-            }
+        public MinFinderExecutor(int size, int numThreads)
+        {
+            this.numThreads = numThreads;
+            array = GenerateArray(size);
+            collector = new MinResultCollector(numThreads);
         }
 
-        public static int GlobalMin => globalMin;
-        public static int GlobalIndex => globalIndex;
-        public static int CompletedThreads => completedThreads;
-        public static int TotalThreads { set { totalThreads = value; } }
-
-        public static void StartThreadsAndWait(int[] array, int numThreads)
+        public (int, int) Execute()
         {
-            totalThreads = numThreads;
-            int arraySize = array.Length;
-            int chunkSize = arraySize / numThreads;
+            int chunkSize = array.Length / numThreads;
             Thread[] threads = new Thread[numThreads];
 
             for (int i = 0; i < numThreads; i++)
             {
                 int start = i * chunkSize;
-                int end = (i == numThreads - 1) ? arraySize : start + chunkSize;
+                int end = (i == numThreads - 1) ? array.Length : start + chunkSize;
 
-                MinFinderThread worker = new MinFinderThread(array, start, end);
+                MinFinderThread worker = new MinFinderThread(array, start, end, collector);
                 threads[i] = new Thread(worker.FindMin);
                 threads[i].Start();
             }
 
-            lock (locker)
-            {
-                while (completedThreads < numThreads)
-                {
-                    Monitor.Wait(locker);
-                }
-            }
-        }
-    }
-
-    internal class Program
-    {
-        static void Main(string[] args)
-        {
-            int arraySize = 1000000;
-            int[] array = GenerateArray(arraySize);
-
-            Console.Write("Enter the number of threads: ");
-            int numThreads = int.Parse(Console.ReadLine());
-
-            MinFinderThread.StartThreadsAndWait(array, numThreads);
-
-            Console.WriteLine($"Global Min: {MinFinderThread.GlobalMin}, Index: {MinFinderThread.GlobalIndex}");
+            return collector.GetResult();
         }
 
-        static int[] GenerateArray(int size)
+        private int[] GenerateArray(int size)
         {
             Random rand = new Random();
             int[] array = new int[size];
@@ -112,6 +123,23 @@ namespace Synchronization
             array[negativeIndex] = -rand.Next(1, 100);
 
             return array;
+        }
+    }
+    
+    internal class Program
+    {
+        static void Main(string[] args)
+        {
+            Console.Write("Enter the size of the array: ");
+            int arraySize = int.Parse(Console.ReadLine());
+
+            Console.Write("Enter the number of threads: ");
+            int numThreads = int.Parse(Console.ReadLine());
+
+            MinFinderExecutor executor = new MinFinderExecutor(arraySize, numThreads);
+            var (globalMin, globalIndex) = executor.Execute();
+
+            Console.WriteLine($"Global Min: {globalMin}, Index: {globalIndex}");
         }
     }
 }
